@@ -132,17 +132,23 @@ def test_html_errors_and_pending():
     assert 'No response recorded' in report
 
 
-def test_html_graph_node_metadata_and_missing_context():
-    report = render_html([
+@pytest.mark.parametrize("renderer", [render_html, render_log])
+def test_graph_node_metadata_and_missing_context(renderer):
+    report = renderer([
         {"extra": {"metadata": {"langgraph_node": "<resolve_context>"}}},
         {"name": "ChatModel", "extra": None},
         {"id": "cycle", "parent_run_id": "cycle"},
     ])
-    assert '<dt>Graph node</dt><dd>&lt;resolve_context&gt;</dd>' in report
-    assert report.count('<dt>Graph node</dt><dd>Not recorded</dd>') == 2
+    if renderer is render_html:
+        assert '<dt>Graph node</dt><dd>&lt;resolve_context&gt;</dd>' in report
+        assert report.count('<dt>Graph node</dt><dd>Not recorded</dd>') == 2
+    else:
+        assert r'- Graph node: &lt;resolve\_context&gt;' in report
+        assert report.count('- Graph node: Not recorded') == 2
 
 
-def test_html_export_inherits_node_from_hidden_ancestors(tmp_path, monkeypatch):
+@pytest.mark.parametrize("extension", ["html", "md"])
+def test_export_inherits_node_from_hidden_ancestors(tmp_path, monkeypatch, extension):
     folder = tmp_path / "runs"
     folder.mkdir()
     records = [
@@ -156,15 +162,22 @@ def test_html_export_inherits_node_from_hidden_ancestors(tmp_path, monkeypatch):
     ]
     for record in records:
         (folder / f"{record['id']}.json").write_text(json.dumps(record))
-    output = tmp_path / "report.html"
+    output = tmp_path / f"report.{extension}"
     monkeypatch.setattr("sys.argv", ["export_log.py", "--data-dir", str(tmp_path), "-o", str(output)])
     main()
     report = output.read_text()
-    assert '<p>Calls: 3</p>' in report
-    assert report.count('<article id=') == 3
-    assert '<dt>Graph node</dt><dd>run_sql</dd>' in report
-    assert '<dt>Graph node</dt><dd>inner_node</dd>' in report
-    assert '<dt>Graph node</dt><dd>Not recorded</dd>' in report
+    if extension == "html":
+        assert '<p>Calls: 3</p>' in report
+        assert report.count('<article id=') == 3
+        assert '<dt>Graph node</dt><dd>run_sql</dd>' in report
+        assert '<dt>Graph node</dt><dd>inner_node</dd>' in report
+        assert '<dt>Graph node</dt><dd>Not recorded</dd>' in report
+    else:
+        assert 'Calls: 3' in report
+        assert sum(line.startswith('## ') for line in report.splitlines()) == 3
+        assert r'- Graph node: run\_sql' in report
+        assert r'- Graph node: inner\_node' in report
+        assert '- Graph node: Not recorded' in report
 
 
 @pytest.mark.parametrize("outputs,expected", [

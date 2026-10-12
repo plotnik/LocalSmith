@@ -140,7 +140,9 @@ def dialog(payload: object, response: bool = False) -> str:
     return "\n\n".join(sections)
 
 
-def render_log(runs: list[dict]) -> str:
+def render_log(runs: list[dict], context_runs: list[dict] | None = None) -> str:
+    runs_by_id = {run["id"]: run for run in (context_runs if context_runs is not None else runs)
+                  if run.get("id")}
     lines = ["# LocalSmith trace log", "", f"Calls: {len(runs)}", "",
              "Ordered by start time (UTC). Calls may overlap; completion order can differ.",
              "Calls with unknown start times appear last. Equal timestamps do not establish causal order.", ""]
@@ -153,6 +155,7 @@ def render_log(runs: list[dict]) -> str:
         lines.extend([
             f"## {index}. {label(run.get('name') or 'Unnamed call')}", "",
             f"- Type: {label(run.get('run_type', 'unknown'))}",
+            f"- Graph node: {label(graph_node(run, runs_by_id))}",
             f"- Started: {started}",
             f"- Ended: {label(run.get('end_time') or 'Not recorded')}",
             f"- Status: {status}",
@@ -379,9 +382,9 @@ def main() -> None:
         parser.error("Output extension must match --format")
     temporary = None
     try:
-        context_runs = load_runs(args.data_dir, args.trace_id, args.all_runs or inferred == "html")
+        context_runs = load_runs(args.data_dir, args.trace_id, all_runs=True)
         runs = [run for run in context_runs if args.all_runs or run.get("run_type") == "llm"]
-        report = render_html(runs, context_runs) if inferred == "html" else render_log(runs)
+        report = render_html(runs, context_runs) if inferred == "html" else render_log(runs, context_runs)
         args.output.parent.mkdir(parents=True, exist_ok=True)
         fd, temporary = tempfile.mkstemp(dir=args.output.parent, prefix=".export-")
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
