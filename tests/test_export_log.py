@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from export_log import load_runs, main, render_html, render_log
+from export_log import load_runs, main, render_html, render_log, token_usage
 
 
 def test_serialized_dialog_and_json_response():
@@ -161,7 +161,62 @@ def test_html_export_inherits_node_from_hidden_ancestors(tmp_path, monkeypatch):
     main()
     report = output.read_text()
     assert '<p>Calls: 3</p>' in report
-    assert report.count('<article>') == 3
+    assert report.count('<article id=') == 3
     assert '<dt>Graph node</dt><dd>run_sql</dd>' in report
     assert '<dt>Graph node</dt><dd>inner_node</dd>' in report
     assert '<dt>Graph node</dt><dd>Not recorded</dd>' in report
+
+
+@pytest.mark.parametrize("outputs,expected", [
+    ({"generations": [[{"message": {"kwargs": {"usage_metadata": {
+        "input_tokens": 12, "output_tokens": 3}}}}]]}, (12, 3)),
+    ({"llm_output": {"token_usage": {"prompt_tokens": 8, "completion_tokens": 0}}}, (8, 0)),
+    ({"usage": {"input_tokens": 0, "output_tokens": 4}}, (0, 4)),
+    ({"usage_metadata": {"input_tokens": -1, "output_tokens": True}}, (None, None)),
+    (None, (None, None)),
+])
+def test_token_usage_response_formats(outputs, expected):
+    assert token_usage({"outputs": outputs}) == expected
+
+
+def test_html_token_counts_totals_and_duplicate_usage():
+    usage = {"input_tokens": 12, "output_tokens": 3}
+    report = render_html([
+        {"run_type": "llm", "extra": {"metadata": {"usage_metadata": usage}},
+         "outputs": {"message": {"usage_metadata": usage, "content": "Hello"}}},
+        {"run_type": "llm", "outputs": {"llm_output": {
+            "token_usage": {"prompt_tokens": 8, "completion_tokens": 0}}}},
+        {"run_type": "llm", "extra": {"metadata": {"usage_metadata": {"input_tokens": 5}}}},
+        {"run_type": "chain", "extra": {"metadata": {"usage_metadata": usage}}},
+    ])
+    assert '<h3>Request</h3>\n<p class="note">Input tokens: 12</p>' in report
+    assert '<h3>Response</h3>\n<p class="note">Output tokens: 3</p>' in report
+    assert 'Output tokens: 0</p>' in report
+    assert 'Output tokens: Not recorded</p>' in report
+    summary = report.split('<h2>Step summary</h2>')[1]
+    assert '<p>LLM calls: 3</p>' in summary
+    assert '<td class="tokens">25</td><td class="tokens">3</td>' in summary
+    assert 'Input usage missing for 0 LLM calls; output usage missing for 1 LLM calls.' in summary
+
+
+def test_html_empty_token_totals():
+    report = render_html([])
+    assert '<td class="tokens">0</td><td class="tokens">0</td>' in report
+
+
+def test_html_step_summary_links_and_escaping():
+    runs = [
+        {"name": '<model>"', "run_type": "llm", "extra": {"metadata": {
+            "langgraph_node": "<node>", "usage_metadata": {"input_tokens": 10, "output_tokens": 2}}}},
+        {"name": '<model>"', "run_type": "llm"},
+    ]
+    report = render_html(runs)
+    summary = report.split('<h2>Step summary</h2>')[1]
+    for index in (1, 2):
+        assert report.count(f'id="step-{index}"') == 1
+        assert f'<a href="#step-{index}">{index}. &lt;model&gt;&quot;</a>' in summary
+    assert '<td>&lt;node&gt;</td><td class="tokens">10</td><td class="tokens">2</td>' in summary
+    assert '<td>Not recorded</td><td class="tokens">Not recorded</td>' in summary
+    assert summary.index('href="#step-1"') < summary.index('href="#step-2"')
+    assert report.index('<h2>Step summary</h2>') > report.rindex('</article>')
+    assert '<tfoot>' in summary

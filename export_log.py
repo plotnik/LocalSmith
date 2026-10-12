@@ -234,6 +234,33 @@ def graph_node(run: dict, runs_by_id: dict) -> str:
     return "Not recorded"
 
 
+def token_usage(run: dict) -> tuple[int | None, int | None]:
+    # Providers can repeat usage on both the run and serialized response.
+    # Take the first recorded count for each direction, never sum copies.
+    def candidates(value: object):
+        if isinstance(value, dict):
+            for key in ("usage_metadata", "token_usage", "usage"):
+                if isinstance(value.get(key), dict):
+                    yield value[key]
+            for key, child in value.items():
+                if key not in ("usage_metadata", "token_usage", "usage"):
+                    yield from candidates(child)
+        elif isinstance(value, list):
+            for child in value:
+                yield from candidates(child)
+
+    counts = [None, None]
+    for source in (run.get("extra"), run.get("outputs")):
+        for usage in candidates(source):
+            for index, keys in enumerate((("input_tokens", "prompt_tokens"),
+                                          ("output_tokens", "completion_tokens"))):
+                for key in keys:
+                    value = usage.get(key)
+                    if counts[index] is None and type(value) is int and value >= 0:
+                        counts[index] = value
+    return tuple(counts)
+
+
 def render_html(runs: list[dict], context_runs: list[dict] | None = None) -> str:
     runs_by_id = {run["id"]: run for run in (context_runs if context_runs is not None else runs)
                   if run.get("id")}
@@ -252,32 +279,74 @@ dt { font-weight: 600; } dd { margin: 0; overflow-wrap: anywhere; }
 .role + .content { display: inline; }
 pre { background: #f4f6f8; border-radius: 6px; padding: 16px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 code { font-family: ui-monospace, monospace; } .note { color: #536170; }
+.table-scroll { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; background: white; }
+th, td { padding: 10px 12px; border-bottom: 1px solid #dbe2e8; text-align: left; }
+thead, tfoot { background: #eef2f6; }
+.tokens { text-align: right; font-variant-numeric: tabular-nums; }
+a { color: #175ca4; } article { scroll-margin-top: 20px; }
 </style></head><body><main>''', '<h1>LocalSmith trace log</h1>',
              f'<p>Calls: {len(runs)}</p>',
              '<p class="note">Ordered by start time (UTC). Calls may overlap; completion order can differ. '
              'Calls with unknown start times appear last. Equal timestamps do not establish causal order.</p>']
     if not runs:
         parts.append('<p>No matching calls were collected.</p>')
+    totals = [0, 0]
+    missing = [0, 0]
+    llm_calls = 0
+    summary_rows = []
     for index, run in enumerate(runs, 1):
+        input_tokens, output_tokens = token_usage(run)
+        name = escape(str(run.get("name") or "Unnamed call"))
+        node = graph_node(run, runs_by_id)
+        summary_rows.append(
+            f'<tr><td><a href="#step-{index}">{index}. {name}</a></td>'
+            f'<td>{escape(node)}</td>'
+            f'<td class="tokens">{input_tokens if input_tokens is not None else "Not recorded"}</td>'
+            f'<td class="tokens">{output_tokens if output_tokens is not None else "Not recorded"}</td></tr>'
+        )
+        if run.get("run_type") == "llm":
+            llm_calls += 1
+            for direction, count in enumerate((input_tokens, output_tokens)):
+                if count is None:
+                    missing[direction] += 1
+                else:
+                    totals[direction] += count
         timestamp = start_time(run)
         status = "Failed" if run.get("error") else ("Completed" if run.get("end_time") else "In progress")
-        parts.append(f'<article><h2>{index}. {escape(str(run.get("name") or "Unnamed call"))}</h2><dl>')
+        parts.append(f'<article id="step-{index}"><h2>{index}. {name}</h2><dl>')
         fields = [("Type", run.get("run_type", "unknown")),
-                  ("Graph node", graph_node(run, runs_by_id)),
+                  ("Graph node", node),
                   ("Started", timestamp.isoformat() if timestamp else "Unknown"),
                   ("Ended", run.get("end_time") or "Not recorded"), ("Status", status),
                   ("Trace ID", run.get("trace_id") or "Not recorded"),
                   ("Run ID", run.get("id") or "Not recorded"),
                   ("Parent ID", run.get("parent_run_id") or "None")]
         parts.extend(f'<dt>{name}</dt><dd>{escape(str(value))}</dd>' for name, value in fields)
-        parts.extend(['</dl><h3>Request</h3>', html_dialog(run.get("inputs")),
-                      '<h3>Response</h3>', html_dialog(run.get("outputs"), response=True)])
+        parts.extend(['</dl><h3>Request</h3>',
+                      f'<p class="note">Input tokens: {input_tokens if input_tokens is not None else "Not recorded"}</p>',
+                      html_dialog(run.get("inputs")), '<h3>Response</h3>',
+                      f'<p class="note">Output tokens: {output_tokens if output_tokens is not None else "Not recorded"}</p>',
+                      html_dialog(run.get("outputs"), response=True)])
         if run.get("outputs") is None:
             parts.append('<p class="note">No response recorded in this snapshot.</p>')
         if run.get("error"):
             parts.extend(['<h3>Error</h3>', html_json(run["error"])])
         parts.append('</article>')
-    parts.append('</main></body></html>')
+    parts.extend(['<section><h2>Step summary</h2>',
+                  f'<p>LLM calls: {llm_calls}</p>',
+                  '<div class="table-scroll"><table aria-label="Step summary">',
+                  '<thead><tr><th scope="col">Step</th><th scope="col">LangGraph node</th>'
+                  '<th scope="col" class="tokens">Input tokens</th>'
+                  '<th scope="col" class="tokens">Output tokens</th></tr></thead><tbody>',
+                  *summary_rows, '</tbody><tfoot><tr><th scope="row" colspan="2">Total (LLM calls)</th>',
+                  f'<td class="tokens">{totals[0]}</td><td class="tokens">{totals[1]}</td>',
+                  '</tr></tfoot></table></div>'])
+    if any(missing):
+        parts.append(f'<p class="note">Totals include recorded usage only. '
+                     f'Input usage missing for {missing[0]} LLM calls; '
+                     f'output usage missing for {missing[1]} LLM calls.</p>')
+    parts.append('</section></main></body></html>')
     return "\n".join(parts) + "\n"
 
 
