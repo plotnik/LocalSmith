@@ -213,7 +213,30 @@ def html_dialog(payload: object, response: bool = False) -> str:
     )
 
 
-def render_html(runs: list[dict]) -> str:
+def graph_node(run: dict, runs_by_id: dict) -> str:
+    # Prefer the call's own metadata; wrappers may only record it on an
+    # ancestor. Never infer a graph node from a model or chain name.
+    seen = set()
+    while run:
+        extra = run.get("extra")
+        metadata = extra.get("metadata") if isinstance(extra, dict) else None
+        node = metadata.get("langgraph_node") if isinstance(metadata, dict) else None
+        if isinstance(node, str) and node.strip():
+            return node
+        parent_id = run.get("parent_run_id")
+        if not parent_id or parent_id in seen:
+            break
+        seen.add(parent_id)
+        parent = runs_by_id.get(parent_id)
+        if parent is None or parent.get("trace_id") != run.get("trace_id"):
+            break
+        run = parent
+    return "Not recorded"
+
+
+def render_html(runs: list[dict], context_runs: list[dict] | None = None) -> str:
+    runs_by_id = {run["id"]: run for run in (context_runs if context_runs is not None else runs)
+                  if run.get("id")}
     parts = ['<!doctype html>', '<html lang="en"><head><meta charset="utf-8">',
              '<meta name="viewport" content="width=device-width, initial-scale=1">',
              '<title>LocalSmith trace log</title>', '''<style>
@@ -240,6 +263,7 @@ code { font-family: ui-monospace, monospace; } .note { color: #536170; }
         status = "Failed" if run.get("error") else ("Completed" if run.get("end_time") else "In progress")
         parts.append(f'<article><h2>{index}. {escape(str(run.get("name") or "Unnamed call"))}</h2><dl>')
         fields = [("Type", run.get("run_type", "unknown")),
+                  ("Graph node", graph_node(run, runs_by_id)),
                   ("Started", timestamp.isoformat() if timestamp else "Unknown"),
                   ("Ended", run.get("end_time") or "Not recorded"), ("Status", status),
                   ("Trace ID", run.get("trace_id") or "Not recorded"),
@@ -286,8 +310,9 @@ def main() -> None:
         parser.error("Output extension must match --format")
     temporary = None
     try:
-        runs = load_runs(args.data_dir, args.trace_id, args.all_runs)
-        report = render_html(runs) if inferred == "html" else render_log(runs)
+        context_runs = load_runs(args.data_dir, args.trace_id, args.all_runs or inferred == "html")
+        runs = [run for run in context_runs if args.all_runs or run.get("run_type") == "llm"]
+        report = render_html(runs, context_runs) if inferred == "html" else render_log(runs)
         args.output.parent.mkdir(parents=True, exist_ok=True)
         fd, temporary = tempfile.mkstemp(dir=args.output.parent, prefix=".export-")
         with os.fdopen(fd, "w", encoding="utf-8") as stream:

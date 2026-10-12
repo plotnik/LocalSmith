@@ -130,3 +130,38 @@ def test_html_errors_and_pending():
     assert '<h3>Error</h3>' in report
     assert '&lt;failed&gt;' in report
     assert 'No response recorded' in report
+
+
+def test_html_graph_node_metadata_and_missing_context():
+    report = render_html([
+        {"extra": {"metadata": {"langgraph_node": "<resolve_context>"}}},
+        {"name": "ChatModel", "extra": None},
+        {"id": "cycle", "parent_run_id": "cycle"},
+    ])
+    assert '<dt>Graph node</dt><dd>&lt;resolve_context&gt;</dd>' in report
+    assert report.count('<dt>Graph node</dt><dd>Not recorded</dd>') == 2
+
+
+def test_html_export_inherits_node_from_hidden_ancestors(tmp_path, monkeypatch):
+    folder = tmp_path / "runs"
+    folder.mkdir()
+    records = [
+        {"id": "node", "run_type": "chain", "trace_id": "a",
+         "extra": {"metadata": {"langgraph_node": "run_sql"}}},
+        {"id": "wrapper", "run_type": "chain", "trace_id": "a", "parent_run_id": "node"},
+        {"id": "llm", "run_type": "llm", "trace_id": "a", "parent_run_id": "wrapper"},
+        {"id": "own", "run_type": "llm", "trace_id": "a", "parent_run_id": "node",
+         "extra": {"metadata": {"langgraph_node": "inner_node"}}},
+        {"id": "other", "run_type": "llm", "trace_id": "b", "parent_run_id": "node"},
+    ]
+    for record in records:
+        (folder / f"{record['id']}.json").write_text(json.dumps(record))
+    output = tmp_path / "report.html"
+    monkeypatch.setattr("sys.argv", ["export_log.py", "--data-dir", str(tmp_path), "-o", str(output)])
+    main()
+    report = output.read_text()
+    assert '<p>Calls: 3</p>' in report
+    assert report.count('<article>') == 3
+    assert '<dt>Graph node</dt><dd>run_sql</dd>' in report
+    assert '<dt>Graph node</dt><dd>inner_node</dd>' in report
+    assert '<dt>Graph node</dt><dd>Not recorded</dd>' in report
