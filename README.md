@@ -22,14 +22,17 @@ uv sync
 uv run uvicorn collector:app --host 127.0.0.1 --port 8001
 ```
 
-Or use pip:
+Or use pip from the repository root:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install .
+python3 -m pip install -r requirements.txt
 uvicorn collector:app --host 127.0.0.1 --port 8001
 ```
+
+`requirements.txt` installs FastAPI and Uvicorn. The exporter uses only the
+Python standard library and can run directly from the repository.
 
 To choose a destination, set `COLLECTOR_OUTPUT_DIR=/absolute/path/to/traces`
 before starting the collector. The default is `./data`, relative to the
@@ -127,13 +130,27 @@ python3 export_log.py --all-runs --output full-log.md
 python3 export_log.py --data-dir /path/to/traces --output localsmith-log.md
 ```
 
-`COLLECTOR_OUTPUT_DIR` also supplies the default data directory. After package
-installation, `localsmith-export` is available as an equivalent command. Export is a
+`COLLECTOR_OUTPUT_DIR` also supplies the default data directory. Installing the
+package with `python3 -m pip install .` (or `uv sync`) also makes
+`localsmith-export` available as an equivalent command. Export is a
 snapshot; run it again to include new calls or completed responses.
 
 ## Try it without an LLM API key
 
-With the collector running in another terminal:
+With the collector running in another terminal, activate the virtual environment
+created above and install the development dependencies:
+
+```bash
+source .venv/bin/activate
+python3 -m pip install -r requirements-dev.txt
+python3 examples/send_trace.py
+python3 -m pytest
+```
+
+`requirements-dev.txt` includes the runtime dependencies, pytest, HTTPX,
+the LangSmith SDK, Sphinx, and PyLit3.
+
+Alternatively, use uv for the demo and tests:
 
 ```bash
 uv sync --group dev
@@ -144,6 +161,21 @@ uv run pytest
 The demo sends a synthetic LLM call through the real LangSmith SDK. For a real
 end-to-end check, invoke a model in your application and inspect the
 new files in `data/llm/`.
+
+## Documentation development
+
+Install `requirements-dev.txt` as shown above to use Sphinx and PyLit3.
+Edit Python implementation in `.py` files, preserving its narrative comments.
+Synchronize the paired `.py.rst` files manually when ready, then build the docs:
+
+```bash
+python3 -m pylit collector.py collector.py.rst
+python3 -m pylit export_log.py export_log.py.rst
+make html
+```
+
+The generated documentation is in `_build/html/`. PyLit synchronization and
+Sphinx builds are separate, manual steps.
 
 ## Protocol scope
 

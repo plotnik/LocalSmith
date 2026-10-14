@@ -156,6 +156,7 @@ def render_log(runs: list[dict], context_runs: list[dict] | None = None) -> str:
             f"## {index}. {label(run.get('name') or 'Unnamed call')}", "",
             f"- Type: {label(run.get('run_type', 'unknown'))}",
             f"- Graph node: {label(graph_node(run, runs_by_id))}",
+            f"- Model: {label(llm_model(run))}",
             f"- Started: {started}",
             f"- Ended: {label(run.get('end_time') or 'Not recorded')}",
             f"- Status: {status}",
@@ -234,6 +235,37 @@ def graph_node(run: dict, runs_by_id: dict) -> str:
         if parent is None or parent.get("trace_id") != run.get("trace_id"):
             break
         run = parent
+    return "Not recorded"
+
+
+def llm_model(run: dict) -> str:
+    # Response metadata identifies the model actually used; invocation
+    # parameters and tracing metadata provide fallbacks for pending calls.
+    # Traverse response wrappers only, never application message content.
+    def recorded_model(value: object) -> str | None:
+        if isinstance(value, dict):
+            for key in ("model_name", "model", "model_id", "ls_model_name"):
+                model = value.get(key)
+                if isinstance(model, str) and model.strip():
+                    return model.strip()
+            for key in ("response_metadata", "llm_output", "generations", "message",
+                        "kwargs", "generation_info"):
+                model = recorded_model(value.get(key))
+                if model:
+                    return model
+        elif isinstance(value, list):
+            for child in value:
+                model = recorded_model(child)
+                if model:
+                    return model
+        return None
+
+    extra = run.get("extra")
+    extra = extra if isinstance(extra, dict) else {}
+    for source in (run.get("outputs"), extra.get("invocation_params"), extra.get("metadata")):
+        model = recorded_model(source)
+        if model:
+            return model
     return "Not recorded"
 
 
@@ -320,6 +352,7 @@ a { color: #175ca4; } article { scroll-margin-top: 20px; }
         parts.append(f'<article id="step-{index}"><h2>{index}. {name}</h2><dl>')
         fields = [("Type", run.get("run_type", "unknown")),
                   ("Graph node", node),
+                  ("Model", llm_model(run)),
                   ("Started", timestamp.isoformat() if timestamp else "Unknown"),
                   ("Ended", run.get("end_time") or "Not recorded"), ("Status", status),
                   ("Trace ID", run.get("trace_id") or "Not recorded"),

@@ -2,7 +2,36 @@ import json
 
 import pytest
 
-from export_log import load_runs, main, render_html, render_log, token_usage
+from export_log import llm_model, load_runs, main, render_html, render_log, token_usage
+
+
+@pytest.mark.parametrize("run,expected", [
+    ({"outputs": {"generations": [[{"message": {"kwargs": {
+        "response_metadata": {"model_name": "gemini-2.5-flash-lite"}}}}]]}},
+     "gemini-2.5-flash-lite"),
+    ({"outputs": {"generations": [[{"generation_info": {"model_name": "gemini"}}]]}}, "gemini"),
+    ({"outputs": {"llm_output": {"model_name": "actual"}},
+      "extra": {"invocation_params": {"model": "requested"}}}, "actual"),
+    ({"extra": {"invocation_params": {"model": "requested"}}}, "requested"),
+    ({"extra": {"metadata": {"ls_model_name": "traced"}}}, "traced"),
+    ({"extra": {"invocation_params": {"model_id": "provider-model"}}}, "provider-model"),
+    ({"name": "ChatModel", "extra": None,
+      "outputs": {"message": {"content": {"model": "application-data"}}}}, "Not recorded"),
+    ({"extra": {"metadata": {"ls_model_name": " "}}}, "Not recorded"),
+])
+def test_llm_model_sources(run, expected):
+    assert llm_model(run) == expected
+
+
+@pytest.mark.parametrize("renderer", [render_log, render_html])
+def test_report_model_field(renderer):
+    report = renderer([{"extra": {"metadata": {"ls_model_name": "<model>*"}}}, {}])
+    if renderer is render_log:
+        assert r'- Model: &lt;model&gt;\*' in report
+        assert '- Model: Not recorded' in report
+    else:
+        assert '<dt>Model</dt><dd>&lt;model&gt;*</dd>' in report
+        assert '<dt>Model</dt><dd>Not recorded</dd>' in report
 
 
 def test_serialized_dialog_and_json_response():

@@ -1,0 +1,10 @@
+-r requirements.txt
+
+# Tests and the LangSmith SDK example, matching pyproject.toml.
+pytest>=8,<10
+httpx>=0.27,<1
+langsmith>=0.3,<1
+
+# Documentation and literate-source conversion (python -m pylit).
+Sphinx>=7,<9
+pylit3>=3.1.1,<4

@@ -1,0 +1,4 @@
+# Runtime dependencies, matching pyproject.toml.
+# export_log.py uses only the Python standard library.
+fastapi>=0.115,<1
+uvicorn>=0.30,<1
